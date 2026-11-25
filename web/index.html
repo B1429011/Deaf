@@ -27,7 +27,13 @@
     .status.ready { background:#eaf7ee; color:#237447; } .status.error { background:#fff0f1; color:#a03d47; }
     .meter-label { display:flex; justify-content:space-between; color:#62748e; font-size:14px; }
     progress { width:100%; height:16px; accent-color:var(--teal); }
-    .result { min-height:310px; background:#11233f; color:#e8f0ff; border-radius:12px; padding:16px; overflow:auto; white-space:pre-wrap; font:14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .result { min-height:170px; background:#11233f; color:#e8f0ff; border-radius:12px; padding:16px; overflow:auto; white-space:pre-wrap; font:14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .summary { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:14px; }
+    .summary-card { border:1px solid var(--line); border-radius:10px; padding:12px; background:#eaf8f6; }
+    .summary-card strong { display:block; font-size:19px; margin-top:4px; }
+    canvas { width:100%; height:145px; display:block; margin-top:10px; border-radius:10px; background:#101d35; }
+    input[type=file] { width:100%; margin-top:8px; font-size:13px; }
+    details { margin-top:12px; color:#62748e; } details pre { margin-top:8px; }
     .output-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
     .output-card { border:1px solid var(--line); border-radius:10px; padding:12px; background:#f7f9fc; font-size:14px; }
     .output-card strong { display:block; margin-bottom:5px; }
@@ -43,7 +49,7 @@
 <body>
   <header>
     <h1>Deaf Agent｜第六版資料流原型</h1>
-    <p class="subtitle">耳機麥克風 → 前處理 → 專用模型介面 → Agent Runtime → 文字／振動／燈號</p>
+    <p class="subtitle">耳機麥克風 → 前處理 → 聲音模型 → Agent Runtime → 音源判斷／文字／振動</p>
   </header>
   <main>
     <div class="flow" aria-label="資料流">
@@ -51,10 +57,10 @@
       <div class="arrow">→</div>
       <div class="flow-step step-process"><strong>② Process</strong><span>前處理、YAMNet / PANNs / AST、DOA、Agent Runtime</span></div>
       <div class="arrow">→</div>
-      <div class="flow-step step-output"><strong>③ Output</strong><span>文字、振動、LED 狀態燈</span></div>
+      <div class="flow-step step-output"><strong>③ Output</strong><span>判斷音源、信心度、文字與振動</span></div>
     </div>
 
-    <div class="notice">目前模型分類是示範介面：網站已能接收耳機麥克風音量，但尚未載入真正的 YAMNet、PANNs 或 AST 權重。你可以用「模擬喇叭事件」查看完整資料流。</div>
+    <div class="notice">YAMNet 可在瀏覽器端載入，不需要在 Windows 安裝 TensorFlow。第一次選用 YAMNet 時會從網路下載模型；若網路或模型服務不可用，仍可使用示範模式。</div>
 
     <div class="grid">
       <section>
@@ -63,6 +69,10 @@
         <button id="micButton">啟用耳機麥克風</button>
         <div class="meter-label"><span>目前音量</span><span id="levelText">0%</span></div>
         <progress id="levelMeter" max="1" value="0"></progress>
+        <label>即時頻譜圖</label>
+        <canvas id="spectrumCanvas" width="900" height="260"></canvas>
+        <label for="audioFile">手機錄音檔（可選）</label>
+        <input id="audioFile" type="file" accept="audio/*" capture="microphone">
 
         <label for="eventType">示範事件類型</label>
         <select id="eventType">
@@ -77,7 +87,7 @@
         <label for="modelBackend">聲音模型</label>
         <select id="modelBackend">
           <option value="demo">示範模式（立即可用）</option>
-          <option value="yamnet">YAMNet（需先安裝模型）</option>
+          <option value="browser_yamnet">YAMNet（瀏覽器載入）</option>
         </select>
 
         <label for="direction">聲音方向（示範）</label>
@@ -95,20 +105,25 @@
 
       <section>
         <h2>Output｜Agent Runtime 結果</h2>
-        <div id="result" class="result">尚未送出資料。</div>
+        <div id="summary" class="summary"><div class="summary-card">偵測音源<strong>尚未分析</strong></div><div class="summary-card">信心度<strong>—</strong></div></div>
         <div id="outputCards" class="output-grid"></div>
+        <details><summary>查看技術資料（給開發者）</summary><div id="result" class="result">尚未送出資料。</div></details>
       </section>
     </div>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script>
-    const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], level: 0, auto: false, lastAuto: 0 };
+    const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], sampleRate: 16000, level: 0, auto: false, lastAuto: 0, yamnet: null, labels: [] };
     const $ = (id) => document.getElementById(id);
+    const sourceNames = { horn:'喇叭', siren:'警笛', alarm:'警報', announcement:'廣播', speech:'語音', loud_sound:'大聲音事件', ambient_sound:'環境聲', doorbell:'門鈴' };
 
     function setStatus(text, kind = '') { $('micStatus').textContent = text; $('micStatus').className = `status ${kind}`; }
     function monitorMicrophone() {
       const data = new Uint8Array(state.analyser.fftSize);
+      const frequency = new Uint8Array(state.analyser.frequencyBinCount);
       const tick = () => {
         state.analyser.getByteTimeDomainData(data);
+        state.analyser.getByteFrequencyData(frequency); drawSpectrum(frequency);
         let sum = 0; for (const value of data) { const x = (value - 128) / 128; sum += x * x; }
         state.level = Math.min(1, Math.sqrt(sum / data.length) * 4);
         $('levelMeter').value = state.level; $('levelText').textContent = `${Math.round(state.level * 100)}%`;
@@ -127,6 +142,7 @@
         state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
         const silentOutput = state.audioContext.createGain(); silentOutput.gain.value = 0;
         source.connect(state.processor); state.processor.connect(silentOutput); silentOutput.connect(state.audioContext.destination);
+        state.sampleRate = state.audioContext.sampleRate;
         state.processor.onaudioprocess = (event) => {
           const input = event.inputBuffer.getChannelData(0);
           state.samples.push(...input);
@@ -135,6 +151,49 @@
         };
         setStatus('耳機麥克風已連線，正在讀取音量', 'ready'); $('micButton').disabled = true; monitorMicrophone();
       } catch (error) { setStatus(`無法取得麥克風：${error.message}`, 'error'); }
+    });
+    function drawSpectrum(values) {
+      const canvas = $('spectrumCanvas'); const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#101d35'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const barWidth = canvas.width / values.length;
+      for (let i = 0; i < values.length; i++) { const height = (values[i] / 255) * (canvas.height - 18); ctx.fillStyle = `hsl(${185 + i * 0.45}, 75%, 58%)`; ctx.fillRect(i * barWidth, canvas.height - height, Math.max(1, barWidth - 1), height); }
+      ctx.fillStyle = '#b8c8df'; ctx.font = '20px sans-serif'; ctx.fillText('低頻', 12, canvas.height - 4); ctx.fillText('高頻', canvas.width - 58, canvas.height - 4);
+    }
+    function resample(samples, fromRate, toRate = 16000) {
+      if (!samples.length || fromRate === toRate) return samples;
+      const outputLength = Math.max(1, Math.round(samples.length * toRate / fromRate)); const step = (samples.length - 1) / Math.max(1, outputLength - 1); const output = new Float32Array(outputLength);
+      for (let i = 0; i < outputLength; i++) { const p = i * step; const left = Math.floor(p); const right = Math.min(left + 1, samples.length - 1); const t = p - left; output[i] = samples[left] * (1 - t) + samples[right] * t; }
+      return output;
+    }
+    function drawSpectrumFromSamples(samples) {
+      const values = new Uint8Array(96); const start = Math.max(0, samples.length - 2048); const chunk = samples.slice(start);
+      for (let i = 0; i < values.length; i++) { const from = Math.floor(i * chunk.length / values.length); const to = Math.max(from + 1, Math.floor((i + 1) * chunk.length / values.length)); let sum = 0; for (let j = from; j < to; j++) sum += Math.abs(chunk[j]); values[i] = Math.min(255, Math.round(sum / Math.max(1, to - from) * 255 * 2)); }
+      drawSpectrum(values);
+    }
+    async function loadYamnet() {
+      if (state.yamnet) return;
+      if (!window.tf) throw new Error('TensorFlow.js 尚未載入，請確認網路連線');
+      setStatus('正在下載 YAMNet（第一次可能需要較久）', 'ready');
+      state.yamnet = await tf.loadGraphModel('https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1/default/1', { fromTFHub: true });
+      const csv = await (await fetch('https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv')).text();
+      state.labels = csv.split(/\r?\n/).slice(1).filter(Boolean).map(line => { const fields = line.split('","'); return (fields[2] || fields[fields.length - 1] || '').replace(/^"|"$/g, ''); });
+      setStatus('YAMNet 已載入，可以分析最近音訊', 'ready');
+    }
+    function normalizeYamnetLabel(label) {
+      const raw = label.toLowerCase();
+      if (raw.includes('horn') || raw.includes('honking')) return 'horn'; if (raw.includes('siren')) return 'siren'; if (raw.includes('alarm')) return 'alarm'; if (raw.includes('announcement')) return 'announcement'; if (raw.includes('speech') || raw.includes('conversation')) return 'speech'; return 'ambient_sound';
+    }
+    async function classifyYamnet() {
+      await loadYamnet(); if (!state.samples.length) throw new Error('請先啟用麥克風或選擇手機錄音檔');
+      const waveform = tf.tensor1d(resample(state.samples, state.sampleRate), 'float32'); const output = state.yamnet.execute(waveform); const scoreTensor = Array.isArray(output) ? output[0] : output; const mean = scoreTensor.mean(0); const scores = await mean.data();
+      let best = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+      const rawLabel = state.labels[best] || `class_${best}`; const result = { label: normalizeYamnetLabel(rawLabel), confidence: Number(scores[best]), rawLabel };
+      tf.dispose([waveform, output, mean]); return result;
+    }
+    $('audioFile').addEventListener('change', async (event) => {
+      const file = event.target.files[0]; if (!file) return;
+      try { if (!state.audioContext) state.audioContext = new (window.AudioContext || window.webkitAudioContext)(); const buffer = await state.audioContext.decodeAudioData(await file.arrayBuffer()); state.samples = Array.from(buffer.getChannelData(0)).slice(-Math.round(buffer.sampleRate * 4)); state.sampleRate = buffer.sampleRate; drawSpectrumFromSamples(state.samples); setStatus(`已載入手機錄音：${file.name}`, 'ready'); }
+      catch (error) { setStatus(`無法讀取錄音檔：${error.message}`, 'error'); }
     });
     function writeText(view, offset, text) { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)); }
     function makeWavBase64(samples, sampleRate) {
@@ -155,19 +214,27 @@
           card.innerHTML = `<strong>振動回饋</strong>pattern：${item.payload.pattern}，方向：${item.payload.direction}`;
           if (navigator.vibrate) navigator.vibrate(item.payload.pattern === 'urgent' ? [350, 100, 350] : [180, 80, 180]);
         }
-        if (item.channel === 'led_light_driver') {
-          const status = item.payload.status || 'normal';
-          card.innerHTML = `<strong><span class="led-sim ${status}"></span>LED 模擬</strong>${status}`;
+        if (item.channel === 'sound_result') {
+          const name = sourceNames[item.payload.source] || item.payload.source;
+          card.innerHTML = `<strong>辨識到的音源</strong>${name}（${item.payload.source}）<br>方向：${item.payload.direction}`;
         }
         $('outputCards').appendChild(card);
       }
     }
     async function sendEvent(eventType = $('eventType').value, direction = $('direction').value) {
       $('result').textContent = '資料處理中…';
-      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.audioContext?.sampleRate || 16000) : null, model_backend: $('modelBackend').value, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
+      let modelLabel = null; let modelConfidence = null; let modelName = null; const backend = $('modelBackend').value;
+      if (backend === 'browser_yamnet') {
+        try { const prediction = await classifyYamnet(); eventType = prediction.label; modelLabel = prediction.label; modelConfidence = prediction.confidence; modelName = `YAMNet (瀏覽器)｜${prediction.rawLabel}`; }
+        catch (error) { setStatus(`YAMNet 無法使用：${error.message}；改用示範模式`, 'error'); }
+      }
+      const effectiveBackend = modelLabel ? 'browser_yamnet' : 'demo';
+      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.sampleRate || 16000) : null, model_backend: effectiveBackend, model_label: modelLabel, model_confidence: modelConfidence, model_name: modelName, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
       try {
         const response = await fetch('/api/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const result = await response.json(); if (!response.ok) throw new Error(result.error || 'API 錯誤');
+        const event = result.structured_event; const label = sourceNames[event.event_type] || event.event_type;
+        $('summary').innerHTML = `<div class="summary-card">偵測音源<strong>${label}</strong><small>${event.event_type}</small></div><div class="summary-card">信心度<strong>${Math.round(event.confidence * 100)}%</strong><small>${event.model_trace.join(' + ')}</small></div>`;
         $('result').textContent = JSON.stringify(result, null, 2); renderOutputs(result.output_actions);
       } catch (error) { $('result').textContent = `送出失敗：${error.message}`; }
     }

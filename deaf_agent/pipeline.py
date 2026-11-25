@@ -40,6 +40,9 @@ class AudioPreprocessor:
             audio_level=float(level),
             audio_samples=_decode_wav_base64(data.audio_wav_base64),
             sample_rate=16000,
+            model_label=data.model_label,
+            model_confidence=data.model_confidence,
+            model_name=data.model_name,
             voice_activity=has_signal,
             features=features,
         )
@@ -98,6 +101,7 @@ class SoundClassifier:
     def status(self) -> Dict[str, Any]:
         return {
             "demo": "ready",
+            "browser_yamnet": "client_side",
             "yamnet": "ready" if self._yamnet is not None else ("error" if self._yamnet_error else "not_loaded"),
             "yamnet_error": self._yamnet_error,
         }
@@ -163,6 +167,11 @@ class SoundClassifier:
         return "ambient_sound"
 
     def predict(self, signal: PreprocessedSignal, backend: str = "demo") -> SoundPrediction:
+        if backend.lower() == "browser_yamnet":
+            label = getattr(signal, "model_label", None) or "ambient_sound"
+            confidence = getattr(signal, "model_confidence", None) or 0.0
+            model = getattr(signal, "model_name", None) or "YAMNet (TensorFlow.js)"
+            return SoundPrediction(label=label, confidence=float(confidence), model=model, status="client_side")
         if backend.lower() == "yamnet":
             return self._predict_yamnet(signal)
         raw = (signal.audio_label or "unknown").lower()
@@ -209,6 +218,7 @@ class ContextBuilder:
             "user_preferences": data.user_preferences,
             "model_backend": data.model_backend,
             "model_status": prediction.status,
+            "model_name": prediction.model,
         }
 
 
@@ -250,9 +260,14 @@ class PlannerRouter:
                 payload={"pattern": event.priority, "direction": direction},
             ),
             OutputAction(
-                channel="led_light_driver",
-                action="set_status",
-                payload={"status": event.priority},
+                channel="sound_result",
+                action="show_detected_source",
+                payload={
+                    "source": event.event_type,
+                    "direction": event.direction,
+                    "confidence": event.confidence,
+                    "priority": event.priority,
+                },
             ),
         ]
         return actions

@@ -19,6 +19,9 @@ class InputEnvelope:
     audio_level: Optional[float] = None
     audio_wav_base64: Optional[str] = None
     model_backend: str = "demo"
+    model_label: Optional[str] = None
+    model_confidence: Optional[float] = None
+    model_name: Optional[str] = None
     user_preferences: Dict[str, Any] = field(default_factory=dict)
     source: str = "microphone_array"
 
@@ -34,6 +37,9 @@ class InputEnvelope:
             audio_level=payload.get("audio_level"),
             audio_wav_base64=payload.get("audio_wav_base64"),
             model_backend=str(payload.get("model_backend", "demo")),
+            model_label=payload.get("model_label"),
+            model_confidence=payload.get("model_confidence"),
+            model_name=payload.get("model_name"),
             user_preferences=dict(payload.get("user_preferences") or {}),
             source=str(payload.get("source", "microphone_array")),
         )
@@ -51,6 +57,9 @@ class PreprocessedSignal:
     audio_level: float
     audio_samples: Optional[List[float]]
     sample_rate: int
+    model_label: Optional[str]
+    model_confidence: Optional[float]
+    model_name: Optional[str]
     voice_activity: bool
     features: List[str]
 

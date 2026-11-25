@@ -11,7 +11,7 @@
   -> 方向估計（DOA / 麥克風陣列介面）
   -> Agent Runtime（Context Builder、Policy / State、Planner / Router）
   -> Structured Event Object
-  -> UI 文字、Haptic 振動、LED 燈號
+  -> 音源判斷、UI 文字、Haptic 振動
 ```
 
 ## 與第六版本架構的對應
@@ -27,7 +27,7 @@
 | Policy / State Store | `PolicyState` |
 | Planner / Router | `PlannerRouter` |
 | 結構化模型輸出 | `StructuredEvent` |
-| UI / Display、Haptic Driver、LED / Light Driver | `OutputAction` |
+| UI / Display、Haptic Driver、音源判斷結果 | `OutputAction` |
 
 雲地部署上，這個第一版把感測輸入、前處理與推論流程放在同一個本機程序中，方便先驗證資料格式。之後可將模型服務、資料儲存與 LLM Gateway 分別移到本地端伺服器或雲端。
 
@@ -63,21 +63,15 @@ cd Deaf
 python -m deaf_agent.web_server
 ```
 
-瀏覽器開啟 <http://127.0.0.1:8000>，按「啟用耳機麥克風」並允許權限。瀏覽器會顯示耳機麥克風音量；按「送出目前資料」即可將資料送入 Agent Runtime。按「模擬喇叭事件」可以直接查看完整的喇叭聲提醒流程。
+瀏覽器開啟 <http://127.0.0.1:8000>，按「啟用耳機麥克風」並允許權限。瀏覽器會顯示耳機麥克風音量與即時頻譜圖；按「送出目前資料」即可將資料送入 Agent Runtime。按「模擬喇叭事件」可以直接查看完整的喇叭聲提醒流程。
 
-目前網頁已完成麥克風接入、音量讀取、資料送出與結果顯示；聲音分類仍使用示範事件選單，日後接入真實模型後可改為由 YAMNet、PANNs 或 AST 自動產生事件類型。
+目前網頁已完成麥克風接入、音量讀取、頻譜圖、資料送出與結果顯示。Output 會直接顯示「辨識到的音源」與信心度；原始 JSON 已放在折疊的技術資料區。
 
-### 啟用真正的 YAMNet
+### 使用真正的 YAMNet
 
-在 Deaf 專案中安裝選用依賴：
+重新啟動網頁後，在「聲音模型」選擇「YAMNet（瀏覽器載入）」。第一次送出音訊時，瀏覽器會下載 YAMNet 權重與類別表，之後會留在瀏覽器快取。瀏覽器會直接分析最近幾秒的耳機麥克風音訊，再把聲音類別與信心分數送入 Agent Runtime；不需要在 Windows 安裝 TensorFlow。
 
-```powershell
-python -m pip install -r requirements-yamnet.txt
-```
-
-重新啟動網頁後，在「聲音模型」選擇「YAMNet（需先安裝模型）」。第一次送出音訊時會下載 YAMNet 權重與類別表，之後會留在本機快取。瀏覽器會把最近幾秒的耳機麥克風音訊以 WAV 傳給後端，YAMNet 再回傳聲音類別與信心分數。
-
-若尚未安裝選用依賴，仍可使用「示範模式」；網頁會在結果中標示目前使用的是示範模式或 YAMNet。
+若網路無法下載模型，仍可使用「示範模式」；網頁會在結果中標示目前使用的是示範模式或 YAMNet。手機也可以用「手機錄音檔」選取錄音後分析；若要即時使用手機麥克風，瀏覽器可能要求 HTTPS，錄音檔方式不受此限制。
 
 ## 目前沒有硬體時的測試方式
 
@@ -87,8 +81,8 @@ python -m pip install -r requirements-yamnet.txt
 耳機麥克風音量
   -> 音訊前處理
   -> Agent Runtime
-  -> UI 文字、瀏覽器振動（若支援）、LED 顏色模擬
+  -> 音源判斷、UI 文字、瀏覽器振動（若支援）
 ```
 
-這個模式用來驗證資料流與使用者回饋，不代表已經完成喇叭或警笛的聲音分類。之後接上雙麥克風陣列、振動馬達與 LED Driver 時，可以沿用同一個輸出介面。
+這個模式用來驗證資料流與使用者回饋，不代表已經完成喇叭或警笛的聲音分類。之後接上雙麥克風陣列與振動馬達時，可以沿用同一個輸出介面；LED 可作為額外硬體提示，但目前網頁不把它當成主要輸出。
 

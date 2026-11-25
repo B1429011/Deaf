@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import argparse
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
@@ -61,8 +63,15 @@ class DeafRequestHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", 8000), DeafRequestHandler)
-    print("Deaf Agent 網頁已啟動： http://127.0.0.1:8000")
+    parser = argparse.ArgumentParser(description="Deaf Agent local web server")
+    parser.add_argument("--host", default="0.0.0.0", help="監聽位址；預設允許同一區網裝置連線")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer((args.host, args.port), DeafRequestHandler)
+    local_ip = socket.gethostbyname(socket.gethostname())
+    print(f"Deaf Agent 網頁已啟動： http://127.0.0.1:{args.port}")
+    if args.host == "0.0.0.0":
+        print(f"同一 Wi-Fi 的其他裝置可嘗試： http://{local_ip}:{args.port}")
     print("按 Ctrl+C 停止伺服器")
     try:
         server.serve_forever()
