@@ -19,7 +19,8 @@ class AudioPreprocessor:
 
     def process(self, data: InputEnvelope) -> PreprocessedSignal:
         label = (data.audio_label or "unknown").strip().lower()
-        has_signal = label not in {"", "unknown", "silence", "none"}
+        level = data.audio_level if isinstance(data.audio_level, (int, float)) else 0.0
+        has_signal = label not in {"", "unknown", "silence", "none"} or level > 0.02
         features = ["audio_frame", "denoised_signal"]
         if data.audio_text:
             features.append("speech_text_candidate")
@@ -31,6 +32,7 @@ class AudioPreprocessor:
             audio_text=data.audio_text,
             image_label=data.image_label,
             direction=data.direction,
+            audio_level=float(level),
             voice_activity=has_signal,
             features=features,
         )
@@ -84,6 +86,7 @@ class ContextBuilder:
             "direction": direction,
             "confidence": prediction.confidence,
             "imu_state": data.imu_state,
+            "audio_level": signal.audio_level,
             "image_label": signal.image_label,
             "features": signal.features,
             "user_preferences": data.user_preferences,

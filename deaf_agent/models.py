@@ -16,6 +16,7 @@ class InputEnvelope:
     direction: Optional[str] = None
     image_label: Optional[str] = None
     imu_state: Optional[str] = None
+    audio_level: Optional[float] = None
     user_preferences: Dict[str, Any] = field(default_factory=dict)
     source: str = "microphone_array"
 
@@ -28,6 +29,7 @@ class InputEnvelope:
             direction=payload.get("direction"),
             image_label=payload.get("image_label"),
             imu_state=payload.get("imu_state"),
+            audio_level=payload.get("audio_level"),
             user_preferences=dict(payload.get("user_preferences") or {}),
             source=str(payload.get("source", "microphone_array")),
         )
@@ -42,6 +44,7 @@ class PreprocessedSignal:
     audio_text: Optional[str]
     image_label: Optional[str]
     direction: Optional[str]
+    audio_level: float
     voice_activity: bool
     features: List[str]
 

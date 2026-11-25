@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deaf Agent｜第六版資料流原型</title>
+  <style>
+    :root { --navy:#11233f; --blue:#2e6ce6; --indigo:#5a54d6; --teal:#138a88; --orange:#d66b22; --bg:#f7f9fc; --line:#d8e1ee; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--navy); font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+    header { padding:28px max(24px, calc((100% - 1180px)/2)); background:#fff; border-bottom:1px solid var(--line); }
+    h1 { margin:0 0 6px; font-size:32px; } h2 { margin:0 0 16px; font-size:21px; } p { line-height:1.6; }
+    .subtitle { color:#62748e; margin:0; }
+    main { max-width:1180px; margin:26px auto; padding:0 24px; display:grid; gap:18px; }
+    .flow { display:grid; grid-template-columns:1fr 42px 1fr 42px 1fr; align-items:center; gap:0; }
+    .flow-step { min-height:120px; padding:18px; border:2px solid var(--line); border-radius:16px; background:#fff; }
+    .flow-step strong { display:block; font-size:18px; margin-bottom:8px; } .flow-step span { color:#62748e; font-size:14px; }
+    .step-input { border-color:var(--blue); background:#eef4ff; } .step-process { border-color:var(--indigo); background:#f0efff; } .step-output { border-color:var(--teal); background:#eaf8f6; }
+    .arrow { text-align:center; font-size:28px; color:#8392a7; }
+    .grid { display:grid; grid-template-columns: minmax(300px, .9fr) minmax(400px, 1.1fr); gap:18px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:18px; padding:22px; box-shadow:0 6px 20px rgba(17,35,63,.05); }
+    label { display:block; font-weight:600; margin:14px 0 6px; } select, button { font:inherit; }
+    select { width:100%; padding:11px 12px; border:1px solid #c6d2e2; border-radius:10px; background:#fff; color:var(--navy); }
+    button { border:0; border-radius:10px; padding:11px 15px; cursor:pointer; margin:14px 8px 0 0; color:#fff; background:var(--blue); font-weight:600; }
+    button.orange { background:var(--orange); } button:disabled { opacity:.5; cursor:not-allowed; }
+    .status { padding:12px 14px; border-radius:10px; background:#f0f4f9; color:#52657f; margin:12px 0; }
+    .status.ready { background:#eaf7ee; color:#237447; } .status.error { background:#fff0f1; color:#a03d47; }
+    .meter-label { display:flex; justify-content:space-between; color:#62748e; font-size:14px; }
+    progress { width:100%; height:16px; accent-color:var(--teal); }
+    .result { min-height:310px; background:#11233f; color:#e8f0ff; border-radius:12px; padding:16px; overflow:auto; white-space:pre-wrap; font:14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .notice { border-left:4px solid var(--orange); padding:10px 14px; background:#fff5ec; color:#74411e; font-size:14px; }
+    @media (max-width: 800px) { .flow, .grid { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); padding:8px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Deaf Agent｜第六版資料流原型</h1>
+    <p class="subtitle">耳機麥克風 → 前處理 → 專用模型介面 → Agent Runtime → 文字／振動／燈號</p>
+  </header>
+  <main>
+    <div class="flow" aria-label="資料流">
+      <div class="flow-step step-input"><strong>① Input</strong><span>耳機麥克風、方向、使用者設定</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-step step-process"><strong>② Process</strong><span>前處理、YAMNet / PANNs / AST、DOA、Agent Runtime</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-step step-output"><strong>③ Output</strong><span>文字、振動、LED 狀態燈</span></div>
+    </div>
+
+    <div class="notice">目前模型分類是示範介面：網站已能接收耳機麥克風音量，但尚未載入真正的 YAMNet、PANNs 或 AST 權重。你可以用「模擬喇叭事件」查看完整資料流。</div>
+
+    <div class="grid">
+      <section>
+        <h2>Input｜輸入與感測</h2>
+        <div id="micStatus" class="status">尚未啟用麥克風</div>
+        <button id="micButton">啟用耳機麥克風</button>
+        <div class="meter-label"><span>目前音量</span><span id="levelText">0%</span></div>
+        <progress id="levelMeter" max="1" value="0"></progress>
+
+        <label for="eventType">示範事件類型</label>
+        <select id="eventType">
+          <option value="horn">horn｜喇叭</option>
+          <option value="siren">siren｜警笛</option>
+          <option value="alarm">alarm｜警報</option>
+          <option value="announcement">announcement｜廣播</option>
+          <option value="speech">speech｜語音</option>
+          <option value="ambient_sound">ambient_sound｜環境聲</option>
+        </select>
+
+        <label for="direction">聲音方向（示範）</label>
+        <select id="direction">
+          <option value="left">left｜左側</option>
+          <option value="right">right｜右側</option>
+          <option value="front">front｜前方</option>
+          <option value="unknown">unknown｜未知</option>
+        </select>
+        <button id="sendButton">送出目前資料</button>
+        <button id="demoButton" class="orange">模擬喇叭事件</button>
+      </section>
+
+      <section>
+        <h2>Output｜Agent Runtime 結果</h2>
+        <div id="result" class="result">尚未送出資料。</div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const state = { stream: null, audioContext: null, analyser: null, level: 0 };
+    const $ = (id) => document.getElementById(id);
+
+    function setStatus(text, kind = '') { $('micStatus').textContent = text; $('micStatus').className = `status ${kind}`; }
+    function monitorMicrophone() {
+      const data = new Uint8Array(state.analyser.fftSize);
+      const tick = () => {
+        state.analyser.getByteTimeDomainData(data);
+        let sum = 0; for (const value of data) { const x = (value - 128) / 128; sum += x * x; }
+        state.level = Math.min(1, Math.sqrt(sum / data.length) * 4);
+        $('levelMeter').value = state.level; $('levelText').textContent = `${Math.round(state.level * 100)}%`;
+        requestAnimationFrame(tick);
+      }; tick();
+    }
+    $('micButton').addEventListener('click', async () => {
+      try {
+        state.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = state.audioContext.createMediaStreamSource(state.stream);
+        state.analyser = state.audioContext.createAnalyser(); state.analyser.fftSize = 512; source.connect(state.analyser);
+        setStatus('耳機麥克風已連線，正在讀取音量', 'ready'); $('micButton').disabled = true; monitorMicrophone();
+      } catch (error) { setStatus(`無法取得麥克風：${error.message}`, 'error'); }
+    });
+    async function sendEvent(eventType = $('eventType').value, direction = $('direction').value) {
+      $('result').textContent = '資料處理中…';
+      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
+      try {
+        const response = await fetch('/api/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || 'API 錯誤');
+        $('result').textContent = JSON.stringify(result, null, 2);
+      } catch (error) { $('result').textContent = `送出失敗：${error.message}`; }
+    }
+    $('sendButton').addEventListener('click', () => sendEvent());
+    $('demoButton').addEventListener('click', () => sendEvent('horn', 'left'));
+  </script>
+</body>
+</html>
+
