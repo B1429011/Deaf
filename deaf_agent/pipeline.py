@@ -24,7 +24,14 @@ class AudioPreprocessor:
 
     def process(self, data: InputEnvelope) -> PreprocessedSignal:
         label = (data.audio_label or "unknown").strip().lower()
-        level = data.audio_level if isinstance(data.audio_level, (int, float)) else 0.0
+        audio_samples = _decode_wav_base64(data.audio_wav_base64)
+        if isinstance(data.audio_level, (int, float)):
+            level = float(data.audio_level)
+        elif audio_samples:
+            rms = (sum(sample * sample for sample in audio_samples) / len(audio_samples)) ** 0.5
+            level = min(1.0, rms * 4)
+        else:
+            level = 0.0
         has_signal = label not in {"", "unknown", "silence", "none"} or level > 0.02
         features = ["audio_frame", "denoised_signal"]
         if data.audio_text:
@@ -38,7 +45,7 @@ class AudioPreprocessor:
             image_label=data.image_label,
             direction=data.direction,
             audio_level=float(level),
-            audio_samples=_decode_wav_base64(data.audio_wav_base64),
+            audio_samples=audio_samples,
             sample_rate=16000,
             model_label=data.model_label,
             model_confidence=data.model_confidence,
@@ -206,10 +213,12 @@ class ContextBuilder:
         signal: PreprocessedSignal,
         prediction: SoundPrediction,
         direction: str,
+        distance_zone: str,
     ) -> Dict[str, Any]:
         return {
             "event_type": prediction.label,
             "direction": direction,
+            "distance_zone": distance_zone,
             "confidence": prediction.confidence,
             "imu_state": data.imu_state,
             "audio_level": signal.audio_level,
@@ -244,32 +253,14 @@ class PlannerRouter:
 
     def plan(self, event: StructuredEvent) -> List[OutputAction]:
         direction = event.direction
-        actions = [
-            OutputAction(
-                channel="ui_display",
-                action="show_event",
-                payload={
-                    "text": f"{event.event_type}｜方向：{direction}",
-                    "priority": event.priority,
-                    "confidence": event.confidence,
-                },
-            ),
-            OutputAction(
-                channel="haptic_driver",
-                action="vibrate",
-                payload={"pattern": event.priority, "direction": direction},
-            ),
-            OutputAction(
-                channel="sound_result",
-                action="show_detected_source",
-                payload={
-                    "source": event.event_type,
-                    "direction": event.direction,
-                    "confidence": event.confidence,
-                    "priority": event.priority,
-                },
-            ),
-        ]
+        preferences = event.context.get("user_preferences", {})
+        feedback_mode = preferences.get("feedback_mode", "text_haptic")
+        actions: List[OutputAction] = []
+        if feedback_mode != "haptic_only":
+            actions.append(OutputAction(channel="ui_display", action="show_event", payload={"text": f"{event.event_type}｜方向：{direction}", "priority": event.priority, "confidence": event.confidence}))
+        if feedback_mode != "text_only":
+            actions.append(OutputAction(channel="haptic_driver", action="vibrate", payload={"pattern": event.priority, "direction": direction}))
+        actions.append(OutputAction(channel="sound_result", action="show_detected_source", payload={"source": event.event_type, "direction": event.direction, "distance_zone": event.distance_zone, "confidence": event.confidence, "priority": event.priority}))
         return actions
 
 
@@ -289,11 +280,13 @@ class AgentRuntime:
         signal = self.preprocessor.process(data)
         prediction = self.classifier.predict(signal, backend=data.model_backend)
         direction, direction_model = self.direction_estimator.estimate(signal)
-        context = self.context_builder.build(data, signal, prediction, direction)
+        distance_zone = self._distance_zone(signal.audio_level)
+        context = self.context_builder.build(data, signal, prediction, direction, distance_zone)
         priority = self.policy_state.priority_for(prediction.label, data.user_preferences)
         event = StructuredEvent(
             event_type=prediction.label,
             direction=direction,
+            distance_zone=distance_zone,
             priority=priority,
             confidence=prediction.confidence,
             timestamp=data.timestamp,
@@ -314,4 +307,15 @@ class AgentRuntime:
             "model_registry": self.classifier.status(),
             "output_actions": [action.to_dict() for action in actions],
         }
+
+    @staticmethod
+    def _distance_zone(audio_level: float) -> str:
+        """用未校正的音量區間做目前版本的距離示範。"""
+        if audio_level >= 0.45:
+            return "near"
+        if audio_level >= 0.20:
+            return "medium"
+        if audio_level >= 0.02:
+            return "far"
+        return "unknown"
 

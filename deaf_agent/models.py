@@ -80,6 +80,7 @@ class StructuredEvent:
 
     event_type: str
     direction: str
+    distance_zone: str
     priority: str
     confidence: float
     timestamp: str

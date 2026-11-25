@@ -97,6 +97,12 @@
           <option value="front">front｜前方</option>
           <option value="unknown">unknown｜未知</option>
         </select>
+        <label for="feedbackMode">個人化回饋方式</label>
+        <select id="feedbackMode">
+          <option value="text_haptic">文字＋振動</option>
+          <option value="text_only">只顯示文字</option>
+          <option value="haptic_only">只使用振動</option>
+        </select>
         <div class="auto-row"><span>音量門檻</span><input id="threshold" type="range" min="0.05" max="0.8" step="0.05" value="0.25"><span id="thresholdText">25%</span></div>
         <button id="sendButton">送出目前資料</button>
         <button id="demoButton" class="orange">模擬喇叭事件</button>
@@ -116,6 +122,7 @@
     const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], sampleRate: 16000, level: 0, auto: false, lastAuto: 0, yamnet: null, labels: [] };
     const $ = (id) => document.getElementById(id);
     const sourceNames = { horn:'喇叭', siren:'警笛', alarm:'警報', announcement:'廣播', speech:'語音', loud_sound:'大聲音事件', ambient_sound:'環境聲', doorbell:'門鈴' };
+    const distanceNames = { near:'近距離（未校正）', medium:'中距離（未校正）', far:'遠距離（未校正）', unknown:'距離未知' };
 
     function setStatus(text, kind = '') { $('micStatus').textContent = text; $('micStatus').className = `status ${kind}`; }
     function monitorMicrophone() {
@@ -216,7 +223,7 @@
         }
         if (item.channel === 'sound_result') {
           const name = sourceNames[item.payload.source] || item.payload.source;
-          card.innerHTML = `<strong>辨識到的音源</strong>${name}（${item.payload.source}）<br>方向：${item.payload.direction}`;
+          card.innerHTML = `<strong>辨識到的音源</strong>${name}（${item.payload.source}）<br>方向：${item.payload.direction}<br>距離：${distanceNames[item.payload.distance_zone] || item.payload.distance_zone}`;
         }
         $('outputCards').appendChild(card);
       }
@@ -229,12 +236,12 @@
         catch (error) { setStatus(`YAMNet 無法使用：${error.message}；改用示範模式`, 'error'); }
       }
       const effectiveBackend = modelLabel ? 'browser_yamnet' : 'demo';
-      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.sampleRate || 16000) : null, model_backend: effectiveBackend, model_label: modelLabel, model_confidence: modelConfidence, model_name: modelName, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
+      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.sampleRate || 16000) : null, model_backend: effectiveBackend, model_label: modelLabel, model_confidence: modelConfidence, model_name: modelName, imu_state: 'web_demo', user_preferences: { feedback_mode: $('feedbackMode').value }, source: 'headset_microphone' };
       try {
         const response = await fetch('/api/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const result = await response.json(); if (!response.ok) throw new Error(result.error || 'API 錯誤');
         const event = result.structured_event; const label = sourceNames[event.event_type] || event.event_type;
-        $('summary').innerHTML = `<div class="summary-card">偵測音源<strong>${label}</strong><small>${event.event_type}</small></div><div class="summary-card">信心度<strong>${Math.round(event.confidence * 100)}%</strong><small>${event.model_trace.join(' + ')}</small></div>`;
+        $('summary').innerHTML = `<div class="summary-card">偵測音源<strong>${label}</strong><small>${event.event_type}</small></div><div class="summary-card">信心度<strong>${Math.round(event.confidence * 100)}%</strong><small>${event.model_trace.join(' + ')}<br>距離：${distanceNames[event.distance_zone] || event.distance_zone}</small></div>`;
         $('result').textContent = JSON.stringify(result, null, 2); renderOutputs(result.output_actions);
       } catch (error) { $('result').textContent = `送出失敗：${error.message}`; }
     }
