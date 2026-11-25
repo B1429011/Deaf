@@ -22,12 +22,20 @@
     label { display:block; font-weight:600; margin:14px 0 6px; } select, button { font:inherit; }
     select { width:100%; padding:11px 12px; border:1px solid #c6d2e2; border-radius:10px; background:#fff; color:var(--navy); }
     button { border:0; border-radius:10px; padding:11px 15px; cursor:pointer; margin:14px 8px 0 0; color:#fff; background:var(--blue); font-weight:600; }
-    button.orange { background:var(--orange); } button:disabled { opacity:.5; cursor:not-allowed; }
+    button.orange { background:var(--orange); } button.secondary { background:#e9eef6; color:var(--navy); } button:disabled { opacity:.5; cursor:not-allowed; }
     .status { padding:12px 14px; border-radius:10px; background:#f0f4f9; color:#52657f; margin:12px 0; }
     .status.ready { background:#eaf7ee; color:#237447; } .status.error { background:#fff0f1; color:#a03d47; }
     .meter-label { display:flex; justify-content:space-between; color:#62748e; font-size:14px; }
     progress { width:100%; height:16px; accent-color:var(--teal); }
     .result { min-height:310px; background:#11233f; color:#e8f0ff; border-radius:12px; padding:16px; overflow:auto; white-space:pre-wrap; font:14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .output-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+    .output-card { border:1px solid var(--line); border-radius:10px; padding:12px; background:#f7f9fc; font-size:14px; }
+    .output-card strong { display:block; margin-bottom:5px; }
+    .led-sim { display:inline-block; width:13px; height:13px; border-radius:50%; background:#b9c4d2; vertical-align:-1px; margin-right:5px; }
+    .led-sim.attention { background:#f0ad2c; box-shadow:0 0 10px #f0ad2c; }
+    .led-sim.urgent { background:#e34e5b; box-shadow:0 0 10px #e34e5b; }
+    .auto-row { display:flex; gap:10px; align-items:center; margin-top:12px; color:#62748e; font-size:14px; }
+    input[type=range] { flex:1; accent-color:var(--orange); }
     .notice { border-left:4px solid var(--orange); padding:10px 14px; background:#fff5ec; color:#74411e; font-size:14px; }
     @media (max-width: 800px) { .flow, .grid { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); padding:8px; } }
   </style>
@@ -79,18 +87,21 @@
           <option value="front">front｜前方</option>
           <option value="unknown">unknown｜未知</option>
         </select>
+        <div class="auto-row"><span>音量門檻</span><input id="threshold" type="range" min="0.05" max="0.8" step="0.05" value="0.25"><span id="thresholdText">25%</span></div>
         <button id="sendButton">送出目前資料</button>
         <button id="demoButton" class="orange">模擬喇叭事件</button>
+        <button id="autoButton" class="secondary">啟動自動示範偵測</button>
       </section>
 
       <section>
         <h2>Output｜Agent Runtime 結果</h2>
         <div id="result" class="result">尚未送出資料。</div>
+        <div id="outputCards" class="output-grid"></div>
       </section>
     </div>
   </main>
   <script>
-    const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], level: 0 };
+    const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], level: 0, auto: false, lastAuto: 0 };
     const $ = (id) => document.getElementById(id);
 
     function setStatus(text, kind = '') { $('micStatus').textContent = text; $('micStatus').className = `status ${kind}`; }
@@ -101,6 +112,9 @@
         let sum = 0; for (const value of data) { const x = (value - 128) / 128; sum += x * x; }
         state.level = Math.min(1, Math.sqrt(sum / data.length) * 4);
         $('levelMeter').value = state.level; $('levelText').textContent = `${Math.round(state.level * 100)}%`;
+        if (state.auto && state.level >= Number($('threshold').value) && Date.now() - state.lastAuto > 4000) {
+          state.lastAuto = Date.now(); sendEvent('loud_event', 'unknown');
+        }
         requestAnimationFrame(tick);
       }; tick();
     }
@@ -132,17 +146,39 @@
       for (let i = 0; i < samples.length; i++) { const sample = Math.max(-1, Math.min(1, samples[i])); view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); }
       let binary = ''; const bytes = new Uint8Array(buffer); for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary);
     }
+    function renderOutputs(actions) {
+      $('outputCards').innerHTML = '';
+      for (const item of actions || []) {
+        const card = document.createElement('div'); card.className = 'output-card';
+        if (item.channel === 'ui_display') { card.innerHTML = `<strong>文字 UI</strong>${item.payload.text}`; }
+        if (item.channel === 'haptic_driver') {
+          card.innerHTML = `<strong>振動回饋</strong>pattern：${item.payload.pattern}，方向：${item.payload.direction}`;
+          if (navigator.vibrate) navigator.vibrate(item.payload.pattern === 'urgent' ? [350, 100, 350] : [180, 80, 180]);
+        }
+        if (item.channel === 'led_light_driver') {
+          const status = item.payload.status || 'normal';
+          card.innerHTML = `<strong><span class="led-sim ${status}"></span>LED 模擬</strong>${status}`;
+        }
+        $('outputCards').appendChild(card);
+      }
+    }
     async function sendEvent(eventType = $('eventType').value, direction = $('direction').value) {
       $('result').textContent = '資料處理中…';
       const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.audioContext?.sampleRate || 16000) : null, model_backend: $('modelBackend').value, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
       try {
         const response = await fetch('/api/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const result = await response.json(); if (!response.ok) throw new Error(result.error || 'API 錯誤');
-        $('result').textContent = JSON.stringify(result, null, 2);
+        $('result').textContent = JSON.stringify(result, null, 2); renderOutputs(result.output_actions);
       } catch (error) { $('result').textContent = `送出失敗：${error.message}`; }
     }
     $('sendButton').addEventListener('click', () => sendEvent());
     $('demoButton').addEventListener('click', () => sendEvent('horn', 'left'));
+    $('threshold').addEventListener('input', () => { $('thresholdText').textContent = `${Math.round(Number($('threshold').value) * 100)}%`; });
+    $('autoButton').addEventListener('click', () => {
+      if (!state.analyser) { setStatus('請先啟用耳機麥克風', 'error'); return; }
+      state.auto = !state.auto; $('autoButton').textContent = state.auto ? '停止自動示範偵測' : '啟動自動示範偵測';
+      setStatus(state.auto ? '自動示範偵測中：音量超過門檻會產生事件' : '耳機麥克風已連線，正在讀取音量', 'ready');
+    });
   </script>
 </body>
 </html>

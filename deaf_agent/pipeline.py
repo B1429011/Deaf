@@ -168,10 +168,10 @@ class SoundClassifier:
         raw = (signal.audio_label or "unknown").lower()
         label = "ambient_sound"
         confidence = 0.55
-        for candidate in ("horn", "siren", "alarm", "speech", "announcement", "doorbell"):
+        for candidate in ("horn", "siren", "alarm", "speech", "announcement", "doorbell", "loud_event"):
             if candidate in raw:
-                label = candidate
-                confidence = 0.90
+                label = "loud_sound" if candidate == "loud_event" else candidate
+                confidence = 0.70 if candidate == "loud_event" else 0.90
                 break
         return SoundPrediction(label=label, confidence=confidence, model=self.MODEL_NAME, status="demo")
 
@@ -224,7 +224,7 @@ class PolicyState:
             return str(preferred[event_type])
         if event_type in {"siren", "alarm"}:
             return "urgent"
-        if event_type in {"horn", "announcement"}:
+        if event_type in {"horn", "announcement", "loud_sound"}:
             return "attention"
         return self.default_priority
 
