@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import csv
+import io
+import struct
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
@@ -33,9 +38,47 @@ class AudioPreprocessor:
             image_label=data.image_label,
             direction=data.direction,
             audio_level=float(level),
+            audio_samples=_decode_wav_base64(data.audio_wav_base64),
+            sample_rate=16000,
             voice_activity=has_signal,
             features=features,
         )
+
+
+def _decode_wav_base64(encoded: str | None) -> List[float] | None:
+    """解碼網頁送來的單聲道 16-bit WAV；沒有音檔時回傳 None。"""
+    if not encoded:
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+        with wave_open(io.BytesIO(raw)) as wav:
+            frames = wav.readframes(wav.getnframes())
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+                return None
+            values = struct.unpack(f"<{len(frames) // 2}h", frames)
+            samples = [sample / 32768.0 for sample in values]
+            source_rate = wav.getframerate()
+            if source_rate == 16000 or not samples:
+                return samples
+            output_length = max(1, round(len(samples) * 16000 / source_rate))
+            step = (len(samples) - 1) / max(1, output_length - 1)
+            resampled = []
+            for index in range(output_length):
+                position = index * step
+                left = int(position)
+                right = min(left + 1, len(samples) - 1)
+                fraction = position - left
+                resampled.append(samples[left] * (1 - fraction) + samples[right] * fraction)
+            return resampled
+    except (ValueError, EOFError, OSError, struct.error):
+        return None
+
+
+def wave_open(stream: io.BytesIO):
+    # Imported here so the rest of the demo path stays dependency-free.
+    import wave
+
+    return wave.open(stream, "rb")
 
 
 class SoundClassifier:
@@ -47,7 +90,81 @@ class SoundClassifier:
 
     MODEL_NAME = "YAMNet / PANNs / AST"
 
-    def predict(self, signal: PreprocessedSignal) -> SoundPrediction:
+    def __init__(self) -> None:
+        self._yamnet = None
+        self._yamnet_labels: List[str] = []
+        self._yamnet_error: str | None = None
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "demo": "ready",
+            "yamnet": "ready" if self._yamnet is not None else ("error" if self._yamnet_error else "not_loaded"),
+            "yamnet_error": self._yamnet_error,
+        }
+
+    def _load_yamnet(self) -> None:
+        if self._yamnet is not None or self._yamnet_error:
+            return
+        try:
+            import tensorflow_hub as hub
+
+            self._yamnet = hub.load("https://tfhub.dev/google/yamnet/1")
+            self._yamnet_labels = self._load_labels()
+        except Exception as exc:  # optional dependency/model download
+            self._yamnet_error = str(exc)
+
+    @staticmethod
+    def _load_labels() -> List[str]:
+        url = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
+        try:
+            text = urllib.request.urlopen(url, timeout=10).read().decode("utf-8")
+            rows = list(csv.DictReader(io.StringIO(text)))
+            return [row.get("display_name", "unknown") for row in rows]
+        except Exception:
+            return []
+
+    def _predict_yamnet(self, signal: PreprocessedSignal) -> SoundPrediction:
+        self._load_yamnet()
+        if self._yamnet is None:
+            return SoundPrediction(
+                label="ambient_sound",
+                confidence=0.0,
+                model="YAMNet",
+                status=f"unavailable: {self._yamnet_error}",
+            )
+        if not signal.audio_samples:
+            return SoundPrediction(label="ambient_sound", confidence=0.0, model="YAMNet", status="no_audio")
+        try:
+            import numpy as np
+
+            waveform = np.asarray(signal.audio_samples, dtype=np.float32)
+            scores, _, _ = self._yamnet(waveform)
+            mean_scores = np.mean(scores.numpy(), axis=0)
+            index = int(np.argmax(mean_scores))
+            raw_label = self._yamnet_labels[index] if index < len(self._yamnet_labels) else f"class_{index}"
+            label = self._normalize_label(raw_label)
+            return SoundPrediction(label=label, confidence=float(mean_scores[index]), model=f"YAMNet: {raw_label}", status="ready")
+        except Exception as exc:
+            return SoundPrediction(label="ambient_sound", confidence=0.0, model="YAMNet", status=f"error: {exc}")
+
+    @staticmethod
+    def _normalize_label(label: str) -> str:
+        raw = label.lower()
+        if "horn" in raw or "honking" in raw:
+            return "horn"
+        if "siren" in raw:
+            return "siren"
+        if "alarm" in raw:
+            return "alarm"
+        if "announcement" in raw:
+            return "announcement"
+        if "speech" in raw or "conversation" in raw:
+            return "speech"
+        return "ambient_sound"
+
+    def predict(self, signal: PreprocessedSignal, backend: str = "demo") -> SoundPrediction:
+        if backend.lower() == "yamnet":
+            return self._predict_yamnet(signal)
         raw = (signal.audio_label or "unknown").lower()
         label = "ambient_sound"
         confidence = 0.55
@@ -56,7 +173,7 @@ class SoundClassifier:
                 label = candidate
                 confidence = 0.90
                 break
-        return SoundPrediction(label=label, confidence=confidence, model=self.MODEL_NAME)
+        return SoundPrediction(label=label, confidence=confidence, model=self.MODEL_NAME, status="demo")
 
 
 class DirectionEstimator:
@@ -90,6 +207,8 @@ class ContextBuilder:
             "image_label": signal.image_label,
             "features": signal.features,
             "user_preferences": data.user_preferences,
+            "model_backend": data.model_backend,
+            "model_status": prediction.status,
         }
 
 
@@ -153,7 +272,7 @@ class AgentRuntime:
     def run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = InputEnvelope.from_dict(payload)
         signal = self.preprocessor.process(data)
-        prediction = self.classifier.predict(signal)
+        prediction = self.classifier.predict(signal, backend=data.model_backend)
         direction, direction_model = self.direction_estimator.estimate(signal)
         context = self.context_builder.build(data, signal, prediction, direction)
         priority = self.policy_state.priority_for(prediction.label, data.user_preferences)
@@ -173,8 +292,11 @@ class AgentRuntime:
             "preprocessing": {
                 "voice_activity": signal.voice_activity,
                 "features": signal.features,
+                "sample_rate": signal.sample_rate,
             },
             "structured_event": event.to_dict(),
+            "model_status": prediction.status,
+            "model_registry": self.classifier.status(),
             "output_actions": [action.to_dict() for action in actions],
         }
 

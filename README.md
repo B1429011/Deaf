@@ -67,3 +67,15 @@ python -m deaf_agent.web_server
 
 目前網頁已完成麥克風接入、音量讀取、資料送出與結果顯示；聲音分類仍使用示範事件選單，日後接入真實模型後可改為由 YAMNet、PANNs 或 AST 自動產生事件類型。
 
+### 啟用真正的 YAMNet
+
+在 Deaf 專案中安裝選用依賴：
+
+```powershell
+python -m pip install -r requirements-yamnet.txt
+```
+
+重新啟動網頁後，在「聲音模型」選擇「YAMNet（需先安裝模型）」。第一次送出音訊時會下載 YAMNet 權重與類別表，之後會留在本機快取。瀏覽器會把最近幾秒的耳機麥克風音訊以 WAV 傳給後端，YAMNet 再回傳聲音類別與信心分數。
+
+若尚未安裝選用依賴，仍可使用「示範模式」；網頁會在結果中標示目前使用的是示範模式或 YAMNet。
+

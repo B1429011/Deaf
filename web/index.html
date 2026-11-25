@@ -66,6 +66,12 @@
           <option value="ambient_sound">ambient_sound｜環境聲</option>
         </select>
 
+        <label for="modelBackend">聲音模型</label>
+        <select id="modelBackend">
+          <option value="demo">示範模式（立即可用）</option>
+          <option value="yamnet">YAMNet（需先安裝模型）</option>
+        </select>
+
         <label for="direction">聲音方向（示範）</label>
         <select id="direction">
           <option value="left">left｜左側</option>
@@ -84,7 +90,7 @@
     </div>
   </main>
   <script>
-    const state = { stream: null, audioContext: null, analyser: null, level: 0 };
+    const state = { stream: null, audioContext: null, analyser: null, processor: null, samples: [], level: 0 };
     const $ = (id) => document.getElementById(id);
 
     function setStatus(text, kind = '') { $('micStatus').textContent = text; $('micStatus').className = `status ${kind}`; }
@@ -104,12 +110,31 @@
         state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = state.audioContext.createMediaStreamSource(state.stream);
         state.analyser = state.audioContext.createAnalyser(); state.analyser.fftSize = 512; source.connect(state.analyser);
+        state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
+        const silentOutput = state.audioContext.createGain(); silentOutput.gain.value = 0;
+        source.connect(state.processor); state.processor.connect(silentOutput); silentOutput.connect(state.audioContext.destination);
+        state.processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          state.samples.push(...input);
+          const maxSamples = Math.round(state.audioContext.sampleRate * 4);
+          if (state.samples.length > maxSamples) state.samples.splice(0, state.samples.length - maxSamples);
+        };
         setStatus('耳機麥克風已連線，正在讀取音量', 'ready'); $('micButton').disabled = true; monitorMicrophone();
       } catch (error) { setStatus(`無法取得麥克風：${error.message}`, 'error'); }
     });
+    function writeText(view, offset, text) { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)); }
+    function makeWavBase64(samples, sampleRate) {
+      const buffer = new ArrayBuffer(44 + samples.length * 2); const view = new DataView(buffer);
+      writeText(view, 0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); writeText(view, 8, 'WAVE');
+      writeText(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      writeText(view, 36, 'data'); view.setUint32(40, samples.length * 2, true);
+      for (let i = 0; i < samples.length; i++) { const sample = Math.max(-1, Math.min(1, samples[i])); view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); }
+      let binary = ''; const bytes = new Uint8Array(buffer); for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary);
+    }
     async function sendEvent(eventType = $('eventType').value, direction = $('direction').value) {
       $('result').textContent = '資料處理中…';
-      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
+      const payload = { timestamp: new Date().toISOString(), audio_label: eventType, direction, audio_level: state.level, audio_wav_base64: state.samples.length ? makeWavBase64(state.samples, state.audioContext?.sampleRate || 16000) : null, model_backend: $('modelBackend').value, imu_state: 'web_demo', user_preferences: {}, source: 'headset_microphone' };
       try {
         const response = await fetch('/api/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const result = await response.json(); if (!response.ok) throw new Error(result.error || 'API 錯誤');

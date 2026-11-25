@@ -1,0 +1,4 @@
+# Optional dependencies for real YAMNet inference.
+tensorflow>=2.16
+tensorflow-hub>=0.16
+

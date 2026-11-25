@@ -17,6 +17,8 @@ class InputEnvelope:
     image_label: Optional[str] = None
     imu_state: Optional[str] = None
     audio_level: Optional[float] = None
+    audio_wav_base64: Optional[str] = None
+    model_backend: str = "demo"
     user_preferences: Dict[str, Any] = field(default_factory=dict)
     source: str = "microphone_array"
 
@@ -30,6 +32,8 @@ class InputEnvelope:
             image_label=payload.get("image_label"),
             imu_state=payload.get("imu_state"),
             audio_level=payload.get("audio_level"),
+            audio_wav_base64=payload.get("audio_wav_base64"),
+            model_backend=str(payload.get("model_backend", "demo")),
             user_preferences=dict(payload.get("user_preferences") or {}),
             source=str(payload.get("source", "microphone_array")),
         )
@@ -45,6 +49,8 @@ class PreprocessedSignal:
     image_label: Optional[str]
     direction: Optional[str]
     audio_level: float
+    audio_samples: Optional[List[float]]
+    sample_rate: int
     voice_activity: bool
     features: List[str]
 
@@ -56,6 +62,7 @@ class SoundPrediction:
     label: str
     confidence: float
     model: str
+    status: str = "ready"
 
 
 @dataclass
